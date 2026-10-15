@@ -1,0 +1,12 @@
+@'
+node_modules/
+dist/
+out/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode-test/
+'@ | Set-Content -Encoding utf8 .gitignore
