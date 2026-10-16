@@ -427,6 +427,74 @@ Representative output shape:
 }
 ```
 
+## Debugging history
+
+The history layer records debugging activity without changing the approved
+schema. It uses `Session` for a debugging session and the existing
+`Hypothesis`, `DebugAttempt`, `Patch`, and `Evidence` labels. Its relationship
+types are:
+
+- `Session-[:TARGETS]->Diagnostic`
+- `Session-[:HAS_HYPOTHESIS]->Hypothesis`
+- `Session-[:HAS_ATTEMPT]->DebugAttempt`
+- `Hypothesis-[:TESTED_BY]->DebugAttempt`
+- `DebugAttempt-[:FOLLOWS]->DebugAttempt`
+- `DebugAttempt-[:APPLIES]->Patch`
+- `Hypothesis-[:HAS_PATCH]->Patch`
+- `DebugAttempt-[:HAS_EVIDENCE]->Evidence`
+- `Evidence-[:SUPPORTS|CONTRADICTS|VALIDATES]->Hypothesis`
+
+All history writes are parameterized and preserve records. Sessions are reused by an explicit `sessionId`, or by a stable identity
+including diagnostic ID, normalized goal, and baseline revision when one is
+not supplied. Reusing an explicit session with conflicting identity metadata
+is rejected. Hypotheses are session-scoped and use stable identities;
+attempts require an explicit `attemptId` for repeatable writes and enforce one
+attempt per sequence number within a session. Out-of-order attempts link the
+immediate predecessor and successor when both exist. Repeated equivalent
+writes use `MERGE`; conflicting immutable patch or evidence metadata is
+rejected. Patch status is first-write-wins rather than an in-place lifecycle
+update. Attempt outcomes and result summaries are write-once: repeating the
+same outcome is safe, while a conflicting outcome or summary is rejected
+instead of overwriting history. An `unevaluated` outcome does not imply
+success or failure.
+
+Select the development graph and create a session linked to an existing
+diagnostic:
+
+```powershell
+$env:FALKORDB_GRAPH = "DebugGraphDev"
+npm run history -- session '{"sessionId":"phase4-session","diagnosticId":"<diagnostic-id>","goal":"Investigate compiler diagnostic","baselineRevision":"DebugGraphDev"}'
+```
+
+Record a hypothesis and ordered attempts:
+
+```powershell
+npm run history -- hypothesis '{"sessionId":"phase4-session","statement":"The return type is incompatible.","provenanceKind":"manual","rootCauseCategory":"type_contract"}'
+npm run history -- attempt '{"sessionId":"phase4-session","hypothesisId":"<hypothesis-id>","attemptId":"attempt-1","sequenceNo":1,"status":"completed","testCommand":"npx tsc --noEmit"}'
+npm run history -- attempt '{"sessionId":"phase4-session","hypothesisId":"<hypothesis-id>","attemptId":"attempt-2","sequenceNo":2,"status":"completed","testCommand":"npx tsc --noEmit"}'
+npm run history -- outcome '{"attemptId":"attempt-1","outcome":"failed","resultSummary":"The diagnostic remains."}'
+npm run history -- outcome '{"attemptId":"attempt-2","outcome":"unevaluated","resultSummary":"No success claimed yet."}'
+```
+
+Attach a patch or evidence only when its provenance supports the recorded
+relationship:
+
+```powershell
+npm run history -- patch '{"attemptId":"attempt-1","hypothesisId":"<hypothesis-id>","patchHash":"<hash>","status":"proposed","diffSummary":"Candidate change","diffRef":"review://patch-1"}'
+npm run history -- evidence '{"attemptId":"attempt-1","hypothesisId":"<hypothesis-id>","kind":"compiler_diagnostic","result":"failed","summary":"The compiler still reports the diagnostic.","sourceKind":"compiler","sourceRef":"<diagnostic-id>","relationToHypothesis":"SUPPORTS"}'
+```
+
+Retrieve bounded deterministic history:
+
+```powershell
+npm run history -- show phase4-session
+```
+
+History retrieval limits results to 100 hypotheses, 100 attempts, 200 patches,
+and 300 evidence records. Attempts are ordered by sequence, start time, and
+ID; other records use timestamp and ID ordering. Empty and partially populated
+sessions are valid.
+
 The `test` npm script is still a placeholder and intentionally fails:
 
 ```powershell
@@ -597,6 +665,7 @@ The last query is parameterized in application code by
     ├── ingest-cli.ts         # CLI entry point for project ingestion
     ├── diagnostic-cli.ts     # CLI entry point for compiler diagnostics
     ├── context-cli.ts        # CLI entry point for graph context retrieval
+    ├── history-cli.ts        # CLI entry point for debugging history
     ├── graph/
     │   ├── client.ts         # FalkorDB connection and environment-selected graph
     │   ├── ingest.ts         # ParsedProject-to-graph persistence
@@ -609,7 +678,8 @@ The last query is parameterized in application code by
     └── diagnostics/
         └── diagnostic-ingest.ts # Compiler diagnostics and latest-scan queries
     └── debugging/
-        └── context-retrieval.ts # Bounded diagnostic context traversal
+        ├── context-retrieval.ts # Bounded diagnostic context traversal
+        └── history.ts            # Debugging sessions and evidence history
 ```
 
 ## Continuing development
