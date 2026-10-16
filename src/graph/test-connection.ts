@@ -1,5 +1,6 @@
 
 import { FalkorDB } from "falkordb";
+import { graphName } from "./client";
 
 async function main(): Promise<void> {
   const db = await FalkorDB.connect({
@@ -8,7 +9,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    const graph = db.selectGraph("DebugGraph");
+    const graph = db.selectGraph(graphName);
 
     const result = await graph.query(`
       CREATE (:ConnectionTest {message: 'Hello from TypeScript'})

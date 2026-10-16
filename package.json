@@ -9,6 +9,8 @@
   },
   "scripts": {
     "ingest": "tsx src/ingest-cli.ts",
+    "diagnostics": "tsx src/diagnostic-cli.ts",
+    "context": "tsx src/context-cli.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
