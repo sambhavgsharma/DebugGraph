@@ -48,6 +48,9 @@ export type DebugAttempt = AttemptInput & {
   readonly id: string;
   readonly status: string;
   readonly startedAt: string;
+  readonly completedAt?: string;
+  readonly outcome?: AttemptOutcome;
+  readonly resultSummary?: string;
 };
 
 export type PatchInput = {
@@ -1014,6 +1017,34 @@ export async function retrieveDebugHistory(
         maxAttempts,
       },
     };
+  } finally {
+    await db.close();
+  }
+}
+
+export async function retrieveDebugHistoriesForDiagnostic(
+  diagnosticId: string,
+  maxSessions = 20,
+  maxAttempts = MAX_ATTEMPTS,
+): Promise<readonly HistoryRecord[]> {
+  requireText(diagnosticId, "diagnosticId");
+  requirePositiveInteger(maxSessions, "maxSessions");
+  requirePositiveInteger(maxAttempts, "maxAttempts");
+  const db = await connectToGraph();
+  try {
+    const graph = db.selectGraph(graphName);
+    const result = await graph.roQuery<QueryRow>(
+      `
+        MATCH (session:Session)-[:TARGETS]->(d:Diagnostic {id: $diagnosticId})
+        RETURN session.id AS sessionId
+        ORDER BY session.startedAt DESC, session.id DESC
+        LIMIT $limit
+      `,
+      { params: { diagnosticId, limit: maxSessions } },
+    );
+    const sessionIds = rowsOf(result.data, "diagnostic history session lookup")
+      .map((row) => stringField(row, "sessionId"));
+    return Promise.all(sessionIds.map((sessionId) => retrieveDebugHistory(sessionId, maxAttempts)));
   } finally {
     await db.close();
   }

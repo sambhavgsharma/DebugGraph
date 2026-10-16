@@ -12,7 +12,8 @@
     "diagnostics": "tsx src/diagnostic-cli.ts",
     "context": "tsx src/context-cli.ts",
     "history": "tsx src/history-cli.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "investigate": "tsx src/investigate-cli.ts",
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "repository": {
     "type": "git",

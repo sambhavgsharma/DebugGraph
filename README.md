@@ -495,13 +495,36 @@ and 300 evidence records. Attempts are ordered by sequence, start time, and
 ID; other records use timestamp and ID ordering. Empty and partially populated
 sessions are valid.
 
-The `test` npm script is still a placeholder and intentionally fails:
+## Evidence-based investigation
+
+The read-only investigation assembler combines the current diagnostic context
+with bounded histories linked through `Session-[:TARGETS]->Diagnostic`:
+
+```powershell
+$env:FALKORDB_GRAPH = "DebugGraphDev"
+npm run investigate -- "<diagnostic-id>"
+```
+
+The result keeps current facts, code context, recorded hypotheses, historical
+outcomes, evidence, and derived recommendations in separate fields. A failed
+historical attempt is reported as historical evidence, not as proof that the
+current diagnostic still fails. Unevaluated attempts and missing evidence
+produce an explicit request for further diagnostic or test evidence. Each
+recommendation includes supporting record IDs, relevant context IDs, a reason,
+and uncertainty.
+
+Investigation retrieval is bounded to the 20 most recent associated sessions
+and 100 attempts per session by default. Session selection is deterministic by
+descending start time and ID. The `test` script runs focused recommendation
+tests with Node's built-in test runner.
+
+Run the focused tests with:
 
 ```powershell
 npm test
 ```
 
-No test runner is configured yet. Stop local containers when finished:
+Stop local containers when finished:
 
 ```powershell
 docker stop debuggraph-browser
@@ -666,6 +689,7 @@ The last query is parameterized in application code by
     ├── diagnostic-cli.ts     # CLI entry point for compiler diagnostics
     ├── context-cli.ts        # CLI entry point for graph context retrieval
     ├── history-cli.ts        # CLI entry point for debugging history
+    ├── investigate-cli.ts    # Evidence-based debugging context assembler
     ├── graph/
     │   ├── client.ts         # FalkorDB connection and environment-selected graph
     │   ├── ingest.ts         # ParsedProject-to-graph persistence
@@ -679,6 +703,7 @@ The last query is parameterized in application code by
         └── diagnostic-ingest.ts # Compiler diagnostics and latest-scan queries
     └── debugging/
         ├── context-retrieval.ts # Bounded diagnostic context traversal
+        ├── context-assembler.ts # Read-only current and historical context
         └── history.ts            # Debugging sessions and evidence history
 ```
 
