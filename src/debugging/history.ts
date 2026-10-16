@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import { connectToGraph, graphName } from "../graph/client";
+import {
+  DEFAULT_MAX_ATTEMPTS_PER_SESSION,
+  MAX_MAX_ATTEMPTS_PER_SESSION,
+  MAX_MAX_SESSIONS,
+  requireBoundedPositiveInteger,
+} from "./limits";
 
 type QueryRow = Readonly<Record<string, unknown>>;
 
@@ -128,7 +134,7 @@ export type HistoryRecord = {
   };
 };
 
-const MAX_ATTEMPTS = 100;
+const MAX_ATTEMPTS = DEFAULT_MAX_ATTEMPTS_PER_SESSION;
 const MAX_HYPOTHESES = 100;
 const MAX_PATCHES = 200;
 const MAX_EVIDENCE = 300;
@@ -145,7 +151,7 @@ function requireText(value: string, field: string): string {
 }
 
 function requirePositiveInteger(value: number, field: string): number {
-  if (!Number.isInteger(value) || value < 1) {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
     throw new Error(`${field} must be a positive integer`);
   }
   return value;
@@ -856,7 +862,11 @@ export async function retrieveDebugHistory(
   maxAttempts = MAX_ATTEMPTS,
 ): Promise<HistoryRecord> {
   requireText(sessionId, "sessionId");
-  requirePositiveInteger(maxAttempts, "maxAttempts");
+  requireBoundedPositiveInteger(
+    maxAttempts,
+    "maxAttempts",
+    MAX_MAX_ATTEMPTS_PER_SESSION,
+  );
   const db = await connectToGraph();
   try {
     const graph = db.selectGraph(graphName);
@@ -1028,8 +1038,12 @@ export async function retrieveDebugHistoriesForDiagnostic(
   maxAttempts = MAX_ATTEMPTS,
 ): Promise<readonly HistoryRecord[]> {
   requireText(diagnosticId, "diagnosticId");
-  requirePositiveInteger(maxSessions, "maxSessions");
-  requirePositiveInteger(maxAttempts, "maxAttempts");
+  requireBoundedPositiveInteger(maxSessions, "maxSessions", MAX_MAX_SESSIONS);
+  requireBoundedPositiveInteger(
+    maxAttempts,
+    "maxAttempts",
+    MAX_MAX_ATTEMPTS_PER_SESSION,
+  );
   const db = await connectToGraph();
   try {
     const graph = db.selectGraph(graphName);

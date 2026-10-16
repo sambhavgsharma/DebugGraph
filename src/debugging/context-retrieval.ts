@@ -1,5 +1,9 @@
 import { resolve } from "node:path";
 import { connectToGraph, graphName } from "../graph/client";
+import {
+  DEFAULT_CONTEXT_LIMITS,
+  validateContextLimits,
+} from "./limits";
 
 type QueryRow = Readonly<Record<string, unknown>>;
 
@@ -64,23 +68,8 @@ export type DiagnosticContext = {
   };
 };
 
-const DEFAULT_LIMITS: Required<ContextRetrievalLimits> = {
-  maxDiagnostics: 10,
-  maxFileSymbols: 50,
-  maxImportedFiles: 20,
-  maxImportedFileSymbols: 20,
-  maxCallers: 25,
-  maxCallees: 25,
-};
-
 function limitsOf(value: ContextRetrievalLimits = {}): Required<ContextRetrievalLimits> {
-  const limits = { ...DEFAULT_LIMITS, ...value };
-  for (const [name, limit] of Object.entries(limits)) {
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new Error(`${name} must be a positive integer`);
-    }
-  }
-  return limits;
+  return validateContextLimits(value);
 }
 
 function isQueryRow(value: unknown): value is QueryRow {

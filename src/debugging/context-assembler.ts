@@ -7,6 +7,13 @@ import {
   retrieveDebugHistoriesForDiagnostic,
   type HistoryRecord,
 } from "./history";
+import {
+  DEFAULT_MAX_ATTEMPTS_PER_SESSION,
+  DEFAULT_MAX_SESSIONS,
+  MAX_MAX_ATTEMPTS_PER_SESSION,
+  MAX_MAX_SESSIONS,
+  requireBoundedPositiveInteger,
+} from "./limits";
 
 export type AssemblerLimits = {
   readonly context?: ContextRetrievalLimits;
@@ -49,21 +56,15 @@ export type AssembledDebugContext = {
   };
 };
 
-const DEFAULT_MAX_SESSIONS = 20;
-const DEFAULT_MAX_ATTEMPTS = 100;
-
-function requirePositiveInteger(value: number, field: string): number {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${field} must be a positive integer`);
-  }
-  return value;
-}
-
 function limitsOf(value: AssemblerLimits): Required<Pick<AssemblerLimits, "maxSessions" | "maxAttemptsPerSession">> {
   const maxSessions = value.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  const maxAttemptsPerSession = value.maxAttemptsPerSession ?? DEFAULT_MAX_ATTEMPTS;
-  requirePositiveInteger(maxSessions, "maxSessions");
-  requirePositiveInteger(maxAttemptsPerSession, "maxAttemptsPerSession");
+  const maxAttemptsPerSession = value.maxAttemptsPerSession ?? DEFAULT_MAX_ATTEMPTS_PER_SESSION;
+  requireBoundedPositiveInteger(maxSessions, "maxSessions", MAX_MAX_SESSIONS);
+  requireBoundedPositiveInteger(
+    maxAttemptsPerSession,
+    "maxAttemptsPerSession",
+    MAX_MAX_ATTEMPTS_PER_SESSION,
+  );
   return { maxSessions, maxAttemptsPerSession };
 }
 

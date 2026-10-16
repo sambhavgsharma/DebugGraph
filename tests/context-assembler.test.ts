@@ -1,8 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { deriveRecommendations } from "../src/debugging/context-assembler";
-import type { DiagnosticContext } from "../src/debugging/context-retrieval";
+import {
+  assembleDebugContext,
+  deriveRecommendations,
+} from "../src/debugging/context-assembler";
+import {
+  retrieveDiagnosticContext,
+  type ContextRetrievalLimits,
+  type DiagnosticContext,
+} from "../src/debugging/context-retrieval";
 import type { HistoryRecord } from "../src/debugging/history";
+import { retrieveDebugHistoriesForDiagnostic } from "../src/debugging/history";
+import {
+  DEFAULT_CONTEXT_LIMITS,
+  DEFAULT_MAX_ATTEMPTS_PER_SESSION,
+  DEFAULT_MAX_SESSIONS,
+  MAX_CONTEXT_LIMITS,
+  MAX_MAX_ATTEMPTS_PER_SESSION,
+  MAX_MAX_SESSIONS,
+  validateContextLimits,
+} from "../src/debugging/limits";
 
 const diagnosticContext: DiagnosticContext = {
   diagnostic: {
@@ -113,4 +130,51 @@ test("an empty history still traces an evidence request to the diagnostic", () =
     ["diagnostic-1"],
   );
   assert.match(recommendations[0].reason, /No historical evidence/);
+});
+
+test("shared defaults and maximum context limits are accepted", () => {
+  assert.deepEqual(validateContextLimits(), DEFAULT_CONTEXT_LIMITS);
+  assert.deepEqual(validateContextLimits(MAX_CONTEXT_LIMITS), MAX_CONTEXT_LIMITS);
+  assert.equal(DEFAULT_MAX_SESSIONS, 20);
+  assert.equal(DEFAULT_MAX_ATTEMPTS_PER_SESSION, 100);
+  assert.equal(MAX_MAX_SESSIONS, 50);
+  assert.equal(MAX_MAX_ATTEMPTS_PER_SESSION, 500);
+});
+
+test("direct debugging APIs reject limits above shared maximums", async () => {
+  await assert.rejects(
+    () => assembleDebugContext("diagnostic-1", {
+      maxSessions: MAX_MAX_SESSIONS + 1,
+    }),
+    /maxSessions must not exceed 50/,
+  );
+  await assert.rejects(
+    () => assembleDebugContext("diagnostic-1", {
+      maxAttemptsPerSession: MAX_MAX_ATTEMPTS_PER_SESSION + 1,
+    }),
+    /maxAttemptsPerSession must not exceed 500/,
+  );
+  for (const field of Object.keys(MAX_CONTEXT_LIMITS) as Array<keyof ContextRetrievalLimits>) {
+    await assert.rejects(
+      () => retrieveDiagnosticContext("diagnostic-1", {
+        [field]: MAX_CONTEXT_LIMITS[field] + 1,
+      }),
+      new RegExp(`${field} must not exceed ${MAX_CONTEXT_LIMITS[field]}`),
+    );
+  }
+  await assert.rejects(
+    () => retrieveDebugHistoriesForDiagnostic(
+      "diagnostic-1",
+      MAX_MAX_SESSIONS + 1,
+    ),
+    /maxSessions must not exceed 50/,
+  );
+  await assert.rejects(
+    () => retrieveDebugHistoriesForDiagnostic(
+      "diagnostic-1",
+      DEFAULT_MAX_SESSIONS,
+      MAX_MAX_ATTEMPTS_PER_SESSION + 1,
+    ),
+    /maxAttempts must not exceed 500/,
+  );
 });

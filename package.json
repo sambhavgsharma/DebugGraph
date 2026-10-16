@@ -13,6 +13,7 @@
     "context": "tsx src/context-cli.ts",
     "history": "tsx src/history-cli.ts",
     "investigate": "tsx src/investigate-cli.ts",
+    "mcp": "tsx src/mcp-server.ts",
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "repository": {
@@ -31,6 +32,8 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "falkordb": "^6.8.0"
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "falkordb": "^6.8.0",
+    "zod": "^4.6.7"
   }
 }

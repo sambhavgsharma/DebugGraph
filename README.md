@@ -518,6 +518,43 @@ and 100 attempts per session by default. Session selection is deterministic by
 descending start time and ID. The `test` script runs focused recommendation
 tests with Node's built-in test runner.
 
+## Read-only MCP integration
+
+The local MCP server exposes exactly one read-only stdio tool,
+`debuggraph_investigate`. It delegates to the same assembler as the
+`investigate` CLI and preserves the complete structured JSON result, including
+provenance, evidence relationships, supporting IDs, and recommendation
+uncertainty.
+
+Run it from an MCP client with:
+
+```powershell
+$env:FALKORDB_GRAPH = "DebugGraphDev"
+node --import tsx src/mcp-server.ts
+```
+
+The equivalent convenience command is `npm run mcp`; when configuring an MCP
+client, prefer the direct `node --import tsx src/mcp-server.ts` command (or an
+equivalent silent process launcher) so the launcher cannot write notices to
+stdout. The server itself sends diagnostics to stderr and reserves stdout for
+MCP protocol traffic.
+
+The required tool input is `diagnosticId`. Optional inputs are
+`maxSessions`, `maxAttemptsPerSession`, and the existing context traversal
+limits (`maxDiagnostics`, `maxFileSymbols`, `maxImportedFiles`,
+`maxImportedFileSymbols`, `maxCallers`, and `maxCallees`). The server performs
+no graph writes. Missing diagnostics, connection failures, validation failures,
+and unexpected errors are returned as MCP tool errors.
+
+The existing defaults remain unchanged: 20 sessions, 100 attempts per session,
+10 diagnostics, 50 file symbols, 20 imported files, 20 symbols per imported
+file, and 25 callers or callees. Shared hard maximums reject larger requests:
+50 sessions, 500 attempts per session, 50 diagnostics, 200 file symbols, 100
+imported files, 100 symbols per imported file, and 100 callers or callees.
+These limits bound history fan-out and the per-file/import/call traversal while
+allowing larger local investigations than the defaults; oversized values fail
+with a validation error rather than being silently truncated.
+
 Run the focused tests with:
 
 ```powershell
@@ -690,6 +727,7 @@ The last query is parameterized in application code by
     ├── context-cli.ts        # CLI entry point for graph context retrieval
     ├── history-cli.ts        # CLI entry point for debugging history
     ├── investigate-cli.ts    # Evidence-based debugging context assembler
+    ├── mcp-server.ts         # Read-only stdio MCP server
     ├── graph/
     │   ├── client.ts         # FalkorDB connection and environment-selected graph
     │   ├── ingest.ts         # ParsedProject-to-graph persistence
