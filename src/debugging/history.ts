@@ -136,6 +136,22 @@ export type HistoryRecord = {
   };
 };
 
+export type EvidenceApplicability =
+  | "diagnostic-associated"
+  | "project-level-uncertain"
+  | "conflicting-provenance-uncertain";
+
+export type DiagnosticEvidenceReconciliation = {
+  readonly diagnosticId: string;
+  readonly latestScan: "present" | "historical-only" | "unknown";
+  readonly evidence: readonly {
+    readonly evidenceId: string;
+    readonly sessionId: string;
+    readonly applicability: EvidenceApplicability;
+    readonly explanation: string;
+  }[];
+};
+
 const MAX_ATTEMPTS = DEFAULT_MAX_ATTEMPTS_PER_SESSION;
 const MAX_HYPOTHESES = 100;
 const MAX_PATCHES = 200;
@@ -1067,4 +1083,135 @@ export async function retrieveDebugHistoriesForDiagnostic(
   } finally {
     await db.close();
   }
+}
+
+export async function retrieveProjectHistories(
+  maxSessions = 20,
+  maxAttempts = MAX_ATTEMPTS,
+  connect: HistoryGraphConnectionFactory = connectToGraph,
+): Promise<readonly HistoryRecord[]> {
+  requireBoundedPositiveInteger(maxSessions, "maxSessions", MAX_MAX_SESSIONS);
+  requireBoundedPositiveInteger(
+    maxAttempts,
+    "maxAttempts",
+    MAX_MAX_ATTEMPTS_PER_SESSION,
+  );
+  const db = await connect();
+  try {
+    const graph = db.selectGraph(graphName);
+    const result = await graph.roQuery<QueryRow>(
+      `
+        MATCH (session:Session)
+        WHERE NOT (session)-[:TARGETS]->(:Diagnostic)
+          AND session.goal <> 'compiler diagnostic scan'
+        RETURN session.id AS sessionId
+        ORDER BY session.startedAt DESC, session.id DESC
+        LIMIT $limit
+      `,
+      { params: { limit: maxSessions } },
+    );
+    const sessionIds = rowsOf(result.data, "project history session lookup")
+      .map((row) => stringField(row, "sessionId"));
+    return Promise.all(sessionIds.map((sessionId) =>
+      retrieveDebugHistory(sessionId, maxAttempts, connect)));
+  } finally {
+    await db.close();
+  }
+}
+
+export async function reconcileDiagnosticEvidence(
+  diagnosticId: string,
+  maxSessions = 20,
+  maxAttempts = MAX_ATTEMPTS,
+  connect: HistoryGraphConnectionFactory = connectToGraph,
+): Promise<DiagnosticEvidenceReconciliation> {
+  requireText(diagnosticId, "diagnosticId");
+  const [associated, project] = await Promise.all([
+    retrieveDebugHistoriesForDiagnostic(diagnosticId, maxSessions, maxAttempts, connect),
+    retrieveProjectHistories(maxSessions, maxAttempts, connect),
+  ]);
+  const db = await connect();
+  try {
+    const graph = db.selectGraph(graphName);
+    const targetRows = rowsOf((await graph.roQuery<QueryRow>(
+      `
+        MATCH (session:Session)-[:TARGETS]->(diagnostic:Diagnostic)
+        WHERE session.id IN $sessionIds
+        RETURN session.id AS sessionId, diagnostic.id AS diagnosticId
+      `,
+      { params: { sessionIds: associated.map((history) => history.session.id) } },
+    )).data, "diagnostic evidence provenance lookup");
+    const targetsBySession = new Map<string, Set<string>>();
+    for (const row of targetRows) {
+      const sessionId = stringField(row, "sessionId");
+      const targets = targetsBySession.get(sessionId) ?? new Set<string>();
+      targets.add(stringField(row, "diagnosticId"));
+      targetsBySession.set(sessionId, targets);
+    }
+    const latestScan = await graph.roQuery<QueryRow>(
+      `
+        MATCH (session:Session)
+        WHERE session.goal = 'compiler diagnostic scan'
+          AND session.status = 'completed'
+        RETURN session.id AS sessionId
+        ORDER BY session.startedAt DESC, session.id DESC
+        LIMIT 1
+      `,
+      {},
+    );
+    const latestSessionId = rowsOf(latestScan.data, "latest completed compiler scan lookup")[0];
+    if (latestSessionId === undefined) {
+      return {
+        diagnosticId,
+        latestScan: "unknown",
+        evidence: reconciliationEvidence(associated, project, diagnosticId, targetsBySession),
+      };
+    }
+    const latestDiagnostics = await graph.roQuery<QueryRow>(
+      `
+        MATCH (session:Session {id: $sessionId})-[:TARGETS]->(diagnostic:Diagnostic)
+        RETURN diagnostic.id AS diagnosticId
+      `,
+      { params: { sessionId: stringField(latestSessionId, "sessionId") } },
+    );
+    const present = rowsOf(latestDiagnostics.data, "latest completed compiler diagnostic lookup")
+      .some((row) => stringField(row, "diagnosticId") === diagnosticId);
+    return {
+      diagnosticId,
+      latestScan: present ? "present" : "historical-only",
+      evidence: reconciliationEvidence(associated, project, diagnosticId, targetsBySession),
+    };
+  } finally {
+    await db.close();
+  }
+}
+
+function reconciliationEvidence(
+  associated: readonly HistoryRecord[],
+  project: readonly HistoryRecord[],
+  diagnosticId: string,
+  targetsBySession: ReadonlyMap<string, ReadonlySet<string>>,
+): DiagnosticEvidenceReconciliation["evidence"] {
+  return [
+    ...associated.flatMap((history) => {
+      const targets = targetsBySession.get(history.session.id);
+      const explicitlyAssociated = targets?.size === 1 && targets.has(diagnosticId);
+      return history.evidence.map((evidence) => ({
+        evidenceId: evidence.id,
+        sessionId: history.session.id,
+        applicability: explicitlyAssociated
+          ? "diagnostic-associated" as const
+          : "conflicting-provenance-uncertain" as const,
+        explanation: explicitlyAssociated
+          ? "The session has an explicit TARGETS relationship to this diagnostic."
+          : "The session has conflicting or incomplete TARGETS provenance, so the evidence is not attributed to this diagnostic.",
+      }));
+    }),
+    ...project.flatMap((history) => history.evidence.map((evidence) => ({
+      evidenceId: evidence.id,
+      sessionId: history.session.id,
+      applicability: "project-level-uncertain" as const,
+      explanation: "No TARGETS relationship or other diagnostic-specific provenance links this project-level evidence to the diagnostic.",
+    }))),
+  ];
 }

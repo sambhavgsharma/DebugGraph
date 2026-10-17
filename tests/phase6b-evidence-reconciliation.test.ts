@@ -13,6 +13,7 @@ import {
 } from "../src/debugging/context-assembler";
 import {
   createOrReuseDebugSession,
+  reconcileDiagnosticEvidence,
   retrieveDebugHistoriesForDiagnostic,
   retrieveDebugHistory,
   type HistoryRecord,
@@ -24,8 +25,10 @@ import type { DiagnosticContext } from "../src/debugging/context-retrieval";
 
 const diagnosticId = "diagnostic-1";
 const evidenceId = "evidence-project-tsc";
+const targetEvidenceId = "evidence-diagnostic-tsc";
 const hypothesisId = "hypothesis-project-tsc";
 const attemptId = "attempt-project-tsc";
+const targetAttemptId = "attempt-diagnostic-tsc";
 const projectSessionId = "project-verification-session";
 const targetedSessionId = "diagnostic-session";
 
@@ -122,6 +125,7 @@ class IsolatedGraph {
   readonly sessions = new Map<string, StoredSession>();
   readonly histories = new Map<string, StoredHistory>();
   readonly targets = new Map<string, string>();
+  readonly additionalTargets: Array<{ readonly sessionId: string; readonly diagnosticId: string }> = [];
   latestDiagnostics: readonly Record<string, unknown>[] = [];
   latestScanId = "scan-latest";
 
@@ -162,6 +166,17 @@ class IsolatedGraph {
           .filter(([, id]) => id === params.diagnosticId)
           .map(([sessionId]) => ({ sessionId })) as T[],
       };
+    }
+    if (query.includes("WHERE session.id IN $sessionIds")) {
+      return {
+        data: [
+          ...[...this.targets.entries()].map(([sessionId, diagnosticId]) => ({ sessionId, diagnosticId })),
+          ...this.additionalTargets,
+        ].filter((row) => (params.sessionIds as string[]).includes(row.sessionId)) as T[],
+      };
+    }
+    if (query.includes("NOT (session)-[:TARGETS]->(:Diagnostic)")) {
+      return { data: [{ sessionId: projectSessionId }] as T[] };
     }
     if (query.includes("WHERE session.goal = 'compiler diagnostic scan'")) {
       return { data: [{ sessionId: this.latestScanId }] as T[] };
@@ -207,6 +222,30 @@ function seedGraph(): IsolatedGraph {
   graph.histories.set(targetedSessionId, {
     ...projectHistory,
     session: { ...projectHistory.session, id: targetedSessionId, diagnosticId },
+    attempts: [{
+      ...projectHistory.attempts[0],
+      id: targetAttemptId,
+    }],
+    evidence: [{
+      ...projectHistory.evidence[0],
+      id: targetEvidenceId,
+      attemptId: targetAttemptId,
+    }],
+    relationships: projectHistory.relationships.map((relationship) => ({
+      ...relationship,
+      fromId: relationship.fromId === projectSessionId
+        ? targetedSessionId
+        : relationship.fromId === attemptId
+          ? targetAttemptId
+          : relationship.fromId === evidenceId
+            ? targetEvidenceId
+            : relationship.fromId,
+      toId: relationship.toId === attemptId
+        ? targetAttemptId
+        : relationship.toId === evidenceId
+          ? targetEvidenceId
+          : relationship.toId,
+    })),
   });
   return graph;
 }
@@ -226,6 +265,11 @@ function assembledWith(histories: readonly HistoryRecord[]): AssembledDebugConte
     hypotheses: histories.flatMap((history) => history.hypothesis),
     outcomes: histories.flatMap((history) => history.outcomes),
     evidence: histories.flatMap((history) => history.evidence),
+    reconciliation: {
+      diagnosticId,
+      latestScan: "unknown",
+      evidence: [],
+    },
     recommendations: [],
     metadata: {
       graphName: "DebugGraphDev",
@@ -298,6 +342,76 @@ test("successful standalone compiler evidence does not resolve the diagnostic", 
   );
 });
 
+test("retrieved historical failure is not presented as a current failure", async () => {
+  const graph = seedGraph();
+  const failedSessionId = "failed-session";
+  const failedAttemptId = "failed-attempt";
+  graph.sessions.set(failedSessionId, {
+    ...projectHistory.session,
+    id: failedSessionId,
+    diagnosticId,
+  });
+  graph.targets.set(failedSessionId, diagnosticId);
+  graph.histories.set(failedSessionId, {
+    ...projectHistory,
+    session: { ...projectHistory.session, id: failedSessionId, diagnosticId },
+    attempts: [{
+      ...projectHistory.attempts[0],
+      id: failedAttemptId,
+      outcome: "failed",
+      resultSummary: "The compiler check failed.",
+    }],
+    evidence: [],
+    relationships: [],
+  });
+
+  const history = await retrieveDebugHistory(failedSessionId, 100, graph.connectionFactory());
+  const recommendations = deriveRecommendations(diagnosticContext, [history]);
+
+  assert.ok(recommendations.some((recommendation) =>
+    recommendation.reason.includes("historical attempt")));
+  assert.ok(recommendations.every((recommendation) =>
+    !recommendation.reason.toLowerCase().includes("current failure")));
+});
+
+test("reconciliation reports actual diagnostic association and conservative project applicability", async () => {
+  const graph = seedGraph();
+  const reconciliation = await reconcileDiagnosticEvidence(
+    diagnosticId,
+    20,
+    100,
+    graph.connectionFactory(),
+  );
+
+  assert.equal(reconciliation.latestScan, "historical-only");
+  assert.deepEqual(
+    reconciliation.evidence.map((entry) => [entry.evidenceId, entry.applicability]),
+    [
+      [targetEvidenceId, "diagnostic-associated"],
+      [evidenceId, "project-level-uncertain"],
+    ],
+  );
+  assert.match(
+    reconciliation.evidence[1].explanation,
+    /No TARGETS relationship or other diagnostic-specific provenance/,
+  );
+});
+
+test("conflicting TARGETS provenance remains uncertain", async () => {
+  const graph = seedGraph();
+  graph.additionalTargets.push({ sessionId: targetedSessionId, diagnosticId: "diagnostic-2" });
+
+  const reconciliation = await reconcileDiagnosticEvidence(
+    diagnosticId,
+    20,
+    100,
+    graph.connectionFactory(),
+  );
+
+  assert.equal(reconciliation.evidence[0].applicability, "conflicting-provenance-uncertain");
+  assert.match(reconciliation.evidence[0].explanation, /conflicting or incomplete/);
+});
+
 test("latest scan omits absent diagnostics while preserving historical data", async () => {
   const graph = seedGraph();
   graph.latestDiagnostics = [{
@@ -320,7 +434,16 @@ test("latest scan omits absent diagnostics while preserving historical data", as
 test("MCP preserves retrieved evidence and CONTRADICTS relationships", async () => {
   const graph = seedGraph();
   const history = await retrieveDebugHistory(projectSessionId, 100, graph.connectionFactory());
-  const assembled = assembledWith([history]);
+  const reconciliation = await reconcileDiagnosticEvidence(
+    diagnosticId,
+    20,
+    100,
+    graph.connectionFactory(),
+  );
+  const assembled = {
+    ...assembledWith([history]),
+    reconciliation,
+  };
   const { server, client } = await connectedServer(async () => assembled);
   try {
     const result = await client.callTool({
@@ -334,6 +457,8 @@ test("MCP preserves retrieved evidence and CONTRADICTS relationships", async () 
       relationship.type === "CONTRADICTS"
       && relationship.fromId === evidenceId
       && relationship.toId === hypothesisId));
+    assert.equal(returned.reconciliation.latestScan, "historical-only");
+    assert.equal(returned.reconciliation.evidence[1].applicability, "project-level-uncertain");
   } finally {
     await client.close();
     await server.close();

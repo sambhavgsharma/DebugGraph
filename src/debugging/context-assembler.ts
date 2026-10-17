@@ -5,6 +5,8 @@ import {
 } from "./context-retrieval";
 import {
   retrieveDebugHistoriesForDiagnostic,
+  reconcileDiagnosticEvidence,
+  type DiagnosticEvidenceReconciliation,
   type HistoryRecord,
 } from "./history";
 import {
@@ -45,6 +47,7 @@ export type AssembledDebugContext = {
   readonly hypotheses: HistoryRecord["hypothesis"];
   readonly outcomes: HistoryRecord["outcomes"];
   readonly evidence: HistoryRecord["evidence"];
+  readonly reconciliation: DiagnosticEvidenceReconciliation;
   readonly recommendations: readonly ContextRecommendation[];
   readonly metadata: {
     readonly graphName: string;
@@ -192,6 +195,11 @@ export async function assembleDebugContext(
   const hypotheses = historicalSessions.flatMap((history) => history.hypothesis);
   const outcomes = historicalSessions.flatMap((history) => history.outcomes);
   const evidence = historicalSessions.flatMap((history) => history.evidence);
+  const reconciliation = await reconcileDiagnosticEvidence(
+    diagnosticId,
+    limits.maxSessions,
+    limits.maxAttemptsPerSession,
+  );
   return {
     diagnostic: codeContext.diagnostic,
     codeContext,
@@ -200,6 +208,7 @@ export async function assembleDebugContext(
     hypotheses,
     outcomes,
     evidence,
+    reconciliation,
     recommendations: deriveRecommendations(codeContext, historicalSessions),
     metadata: {
       graphName: codeContext.metadata.graphName,

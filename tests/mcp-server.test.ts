@@ -48,6 +48,11 @@ const assembled: AssembledDebugContext = {
   hypotheses: [],
   outcomes: [],
   evidence: [],
+  reconciliation: {
+    diagnosticId: "diagnostic-1",
+    latestScan: "unknown",
+    evidence: [],
+  },
   recommendations: [],
   metadata: {
     graphName: "DebugGraphDev",

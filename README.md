@@ -526,6 +526,13 @@ are included in a diagnostic-specific investigation. Project-level verification
 must not be treated as evidence for a particular diagnostic unless a separate
 association is explicitly established from matching provenance.
 
+The investigation context also exposes read-only evidence reconciliation. It
+marks evidence from an explicit `TARGETS` session as diagnostic-associated,
+reports evidence from sessions without that relationship as
+project-level-uncertain, and marks conflicting target provenance as uncertain.
+The latest completed compiler scan is reported separately, so a historical
+diagnostic absent from that scan is not presented as currently detected.
+
 Investigation retrieval is bounded to the 20 most recent associated sessions
 and 100 attempts per session by default. Session selection is deterministic by
 descending start time and ID. The `test` script runs focused recommendation
