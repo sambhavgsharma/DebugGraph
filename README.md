@@ -1,16 +1,18 @@
 # DebugGraph
 
-DebugGraph is a graph-powered debugging foundation for AI coding agents. Its
-long-term goal is to connect code structure, diagnostics, debugging
+DebugGraph is a graph-powered debugging foundation for AI coding agents. It
+connects code structure, diagnostics, bounded code context, debugging
 hypotheses, patches, attempts, test results, and evidence so an agent can
-trace possible causes and avoid repeating unsuccessful experiments without new
-evidence.
+investigate possible causes and avoid repeating unsuccessful experiments
+without new evidence.
 
-The current repository implements code ingestion and compiler-diagnostic
-scanning. It parses a TypeScript/JavaScript repository and persists its files,
-symbols, local imports, resolved function calls, compiler diagnostics, and
-timestamped diagnostic scan sessions in FalkorDB. The debugging-session engine
-and autonomous repair workflow are not implemented yet.
+The current repository implements TypeScript/JavaScript code ingestion,
+compiler-diagnostic scanning, debugging-history recording, bounded
+graph-backed context retrieval, evidence-based investigation, conservative
+evidence reconciliation, and a read-only MCP tool. It persists these records
+in FalkorDB and exposes them through CLI commands and the MCP server.
+Autonomous code repair, including selecting and applying fixes, remains
+unimplemented.
 
 ## Table of contents
 
@@ -56,15 +58,26 @@ and autonomous repair workflow are not implemented yet.
   diagnostic identities, source file locations, and nearest-symbol
   associations when the source position supports them.
 - Latest-scan diagnostic output through the `diagnostics` CLI command.
+- Bounded graph-backed diagnostic context retrieval through the `context` CLI
+  command.
+- Debugging sessions, hypotheses, attempts, patches, outcomes, and evidence
+  with repeatable, write-once, and provenance-aware history operations.
+- Read-only evidence-based investigation with bounded history retrieval,
+  conservative reconciliation of diagnostic-associated versus project-level
+  evidence, and recommendations that retain uncertainty.
+- A read-only stdio MCP server exposing the same investigation assembler
+  through the `debuggraph_investigate` tool.
 
 ### Not implemented yet
 
 - A browser UI or HTTP application server.
 - API endpoint tracing or cross-service type-contract tracing.
-- Repeated-failure detection and retry-prevention logic.
-- A VS Code debugging interface or autonomous coding-agent workflow.
+- Automatic selection or application of code repairs, including an autonomous
+  coding-agent workflow.
+- A VS Code debugging interface.
 - Automatic schema initialization from an npm script.
-- An application server or a configured automated test runner.
+- Broader repeated-failure detection beyond the current evidence-based
+  recommendations.
 
 The graph may contain older development or smoke-test records. Counts from a
 particular local database are snapshots, not project guarantees.
@@ -78,11 +91,13 @@ DebugGraph is intended to maintain two related graph views:
 2. **Debugging history** — diagnostic observations, sessions, hypotheses,
    patches, attempts, tests, and evidence.
 
-The code currently implements the code graph and compiler-diagnostic scan
-parts of these views. Graph traversal is the planned mechanism for retrieving
-nearby code and, later, relevant debugging history. Recorded outcomes are
-intended to support evidence-based debugging and repeated-failure detection
-once those features are built.
+The code graph, compiler-diagnostic scans, bounded context traversal, and
+debugging-history and investigation layers are implemented. Context retrieval
+traverses nearby files, symbols, imports, calls, and diagnostic associations
+within explicit limits. Investigation combines that context with bounded
+diagnostic-targeted history and reconciles evidence conservatively. Autonomous
+repair, browser/API surfaces, endpoint tracing, and broader retry-prevention
+logic remain planned.
 
 The ingestion flow is:
 
@@ -166,11 +181,13 @@ The variables are:
 | `FALKORDB_HOST` | `127.0.0.1` | Host passed to `FalkorDB.connect`. |
 | `FALKORDB_PORT` | `6379` | Port passed to `FalkorDB.connect`. |
 | `FALKORDB_GRAPH` | `DebugGraphDev` in `.env.example`, otherwise `DebugGraph` | Graph selected by all graph operations. |
-| `FALKORDB_VOLUME` | `debuggraph-data` | Existing Docker volume mounted at `/data` by Compose. |
+| `FALKORDB_VOLUME` | Compose configuration | External Docker volume mounted at `/var/lib/falkordb/data` by Compose. |
 
-The current `.env` file is not loaded automatically by the application. If
-you need values from it in a PowerShell session, load them explicitly or set
-the environment variables in the session, for example:
+The current `.env` file is not loaded automatically by the application. Docker
+Compose does use `.env` for Compose-variable interpolation, including the
+volume name and port mapping. If the Node process needs values from the same
+settings, load them explicitly or set the environment variables in the
+PowerShell session, for example:
 
 ```powershell
 $env:FALKORDB_HOST = "127.0.0.1"
@@ -327,8 +344,9 @@ the value of `FALKORDB_GRAPH` (or `DebugGraph` when unset) when prompted.
 After initial setup, choose the graph explicitly for the session:
 
 ```powershell
-docker start debuggraph-db
 $env:FALKORDB_GRAPH = "DebugGraphDev"
+npm run db:up
+npm run db:status
 npx tsc --noEmit
 npm run ingest
 ```
@@ -347,10 +365,21 @@ Imports are persisted only when TypeScript resolves their target to one of the
 scanned files; external package imports are not written as `IMPORTS` edges.
 
 There is currently no development server command. The available executable
-entry points are:
+entry points and package scripts are:
 
 ```powershell
+npm run db:up
+npm run db:status
+npm run db:logs
+npm run db:stop
+npm run db:down
 npm run ingest
+npm run diagnostics
+npm run context -- .
+npm run history -- show <session-id>
+npm run investigate -- <diagnostic-id>
+npm run mcp
+npm test
 npx tsx .\src\graph\test-connection.ts
 npx tsx --eval "import { initializeSchema, validateSchema } from './src/graph/schema.ts'; (async () => { await initializeSchema(); console.log(await validateSchema()); })();"
 ```
@@ -554,11 +583,11 @@ stdout. The server itself sends diagnostics to stderr and reserves stdout for
 MCP protocol traffic.
 
 The required tool input is `diagnosticId`. Optional inputs are
-`maxSessions`, `maxAttemptsPerSession`, and the existing context traversal
-limits (`maxDiagnostics`, `maxFileSymbols`, `maxImportedFiles`,
-`maxImportedFileSymbols`, `maxCallers`, and `maxCallees`). The server performs
-no graph writes. Missing diagnostics, connection failures, validation failures,
-and unexpected errors are returned as MCP tool errors.
+`maxSessions`, `maxAttemptsPerSession`, and a `context` object containing the
+existing traversal limits (`maxDiagnostics`, `maxFileSymbols`,
+`maxImportedFiles`, `maxImportedFileSymbols`, `maxCallers`, and `maxCallees`).
+The server performs no graph writes. Missing diagnostics, connection failures,
+validation failures, and unexpected errors are returned as MCP tool errors.
 
 The existing defaults remain unchanged: 20 sessions, 100 attempts per session,
 10 diagnostics, 50 file symbols, 20 imported files, 20 symbols per imported
@@ -583,7 +612,6 @@ Use a dedicated graph so the demo cannot mix with an existing `DebugGraph`:
 $env:FALKORDB_HOST = "127.0.0.1"
 $env:FALKORDB_PORT = "6379"
 $env:FALKORDB_GRAPH = "DebugGraphDev"
-$env:FALKORDB_VOLUME = "debuggraph-data"
 npm run db:volume
 npm run db:up
 npx tsx --eval "import { initializeSchema } from './src/graph/schema.ts'; (async () => { await initializeSchema(); })();"
@@ -680,8 +708,10 @@ timestamps, and sequence numbers are not declared unique by the current
 schema. Temporal ordering and per-session sequence invariants therefore
 remain application-level concerns.
 
-The debugging-related labels are schema support only at present. The current
-ingestion pipeline writes `Service`, `File`, and `Symbol` nodes.
+The current ingestion pipeline writes `Service`, `File`, and `Symbol` nodes.
+The history CLI writes the debugging-related labels and relationships described
+in [Debugging history](#debugging-history); autonomous repair is not part of
+those writes.
 
 ### Implemented relationships
 
@@ -829,19 +859,16 @@ The last query is parameterized in application code by
 
 Prioritize changes in this order:
 
-1. Keep ingestion accurate, idempotent, and testable. Add focused parser and
-   persistence tests before changing identity or relationship semantics.
+1. Keep ingestion, diagnostic scanning, bounded context retrieval, and history
+   operations accurate, idempotent, and testable.
 2. Expand compiler diagnostic coverage and retrieval, including richer
    configuration and source associations.
-3. Build graph-based context retrieval across imports, calls, diagnostics, and
-   symbols.
-4. Persist debugging sessions, hypotheses, patch attempts, evidence, and test
-   outcomes using the existing schema definitions.
-5. Implement repeated-failure detection that considers whether new evidence or
-   relevant context justifies another attempt.
-6. Add API endpoint and cross-service type-contract tracing.
-7. Integrate the graph with a VS Code debugging interface or AI coding-agent
-   workflow.
+3. Improve evidence reconciliation and repeated-failure detection while
+   preserving conservative uncertainty handling.
+4. Add API endpoint and cross-service type-contract tracing.
+5. Integrate the graph with a VS Code debugging interface.
+6. Design and implement autonomous code repair only after the investigation
+   and evidence contracts are sufficiently mature.
 
 These are planned milestones, not current capabilities.
 
@@ -851,7 +878,7 @@ For each feature, follow this development pattern:
 2. Implement one cohesive capability without changing unrelated modules.
 3. Use parameterized queries and strict result-shape validation.
 4. Preserve `finally`-based FalkorDB connection cleanup.
-5. Run `npx tsc --noEmit` and focused tests once a test runner exists.
+5. Run `npx tsc --noEmit` and the focused Node test suite with `npm test`.
 6. Verify idempotency against a development graph.
 7. Update this README only after behavior and commands are actually available.
 
