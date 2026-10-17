@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { connectToGraph, graphName } from "../graph/client";
+import type { FalkorDB } from "falkordb";
 import {
   DEFAULT_MAX_ATTEMPTS_PER_SESSION,
   MAX_MAX_ATTEMPTS_PER_SESSION,
@@ -8,6 +9,7 @@ import {
 } from "./limits";
 
 type QueryRow = Readonly<Record<string, unknown>>;
+export type HistoryGraphConnectionFactory = () => Promise<FalkorDB>;
 
 export type DebugSessionInput = {
   readonly sessionId?: string;
@@ -250,6 +252,7 @@ function attemptStatus(value: string): "planned" | "running" | "completed" {
 
 export async function createOrReuseDebugSession(
   input: DebugSessionInput,
+  connect: HistoryGraphConnectionFactory = connectToGraph,
 ): Promise<DebugSession> {
   requireText(input.goal, "goal");
   const diagnosticId = optionalText(input.diagnosticId, "diagnosticId");
@@ -259,7 +262,7 @@ export async function createOrReuseDebugSession(
     ? stableId("debug-session", `${diagnosticId ?? "<none>"}:${normalizedGoal}:${baselineRevision ?? "<none>"}`)
     : requireText(input.sessionId, "sessionId");
   const startedAt = new Date().toISOString();
-  const db = await connectToGraph();
+  const db = await connect();
   try {
     const graph = db.selectGraph(graphName);
     const existing = await graph.roQuery<QueryRow>(
@@ -860,6 +863,7 @@ export async function recordEvidence(input: EvidenceInput): Promise<DebugEvidenc
 export async function retrieveDebugHistory(
   sessionId: string,
   maxAttempts = MAX_ATTEMPTS,
+  connect: HistoryGraphConnectionFactory = connectToGraph,
 ): Promise<HistoryRecord> {
   requireText(sessionId, "sessionId");
   requireBoundedPositiveInteger(
@@ -867,7 +871,7 @@ export async function retrieveDebugHistory(
     "maxAttempts",
     MAX_MAX_ATTEMPTS_PER_SESSION,
   );
-  const db = await connectToGraph();
+  const db = await connect();
   try {
     const graph = db.selectGraph(graphName);
     const sessionRow = await queryOne(
@@ -1036,6 +1040,7 @@ export async function retrieveDebugHistoriesForDiagnostic(
   diagnosticId: string,
   maxSessions = 20,
   maxAttempts = MAX_ATTEMPTS,
+  connect: HistoryGraphConnectionFactory = connectToGraph,
 ): Promise<readonly HistoryRecord[]> {
   requireText(diagnosticId, "diagnosticId");
   requireBoundedPositiveInteger(maxSessions, "maxSessions", MAX_MAX_SESSIONS);
@@ -1044,7 +1049,7 @@ export async function retrieveDebugHistoriesForDiagnostic(
     "maxAttempts",
     MAX_MAX_ATTEMPTS_PER_SESSION,
   );
-  const db = await connectToGraph();
+  const db = await connect();
   try {
     const graph = db.selectGraph(graphName);
     const result = await graph.roQuery<QueryRow>(
@@ -1058,7 +1063,7 @@ export async function retrieveDebugHistoriesForDiagnostic(
     );
     const sessionIds = rowsOf(result.data, "diagnostic history session lookup")
       .map((row) => stringField(row, "sessionId"));
-    return Promise.all(sessionIds.map((sessionId) => retrieveDebugHistory(sessionId, maxAttempts)));
+    return Promise.all(sessionIds.map((sessionId) => retrieveDebugHistory(sessionId, maxAttempts, connect)));
   } finally {
     await db.close();
   }

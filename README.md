@@ -458,6 +458,14 @@ same outcome is safe, while a conflicting outcome or summary is rejected
 instead of overwriting history. An `unevaluated` outcome does not imply
 success or failure.
 
+The `diagnosticId` on a debugging session is optional. A session created
+without it is project-level history: its attempts and evidence remain
+retrievable through that session, but they are not included in
+diagnostic-targeted investigation history. A successful project-level
+verification such as `npx tsc --noEmit` is historical evidence only; exit code
+zero does not create a `TARGETS` relationship or resolve a historical
+diagnostic.
+
 Select the development graph and create a session linked to an existing
 diagnostic:
 
@@ -512,6 +520,11 @@ current diagnostic still fails. Unevaluated attempts and missing evidence
 produce an explicit request for further diagnostic or test evidence. Each
 recommendation includes supporting record IDs, relevant context IDs, a reason,
 and uncertainty.
+
+Only sessions explicitly connected through `Session-[:TARGETS]->Diagnostic`
+are included in a diagnostic-specific investigation. Project-level verification
+must not be treated as evidence for a particular diagnostic unless a separate
+association is explicitly established from matching provenance.
 
 Investigation retrieval is bounded to the 20 most recent associated sessions
 and 100 attempts per session by default. Session selection is deterministic by

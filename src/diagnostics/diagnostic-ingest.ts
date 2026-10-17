@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { connectToGraph, graphName } from "../graph/client";
+import type { FalkorDB } from "falkordb";
 import { parseProject, type ParsedSymbol } from "../parser/project-parser";
 
 const SOURCE_EXTENSIONS = new Set([
@@ -39,6 +40,7 @@ export type DiagnosticScanSummary = {
 
 type DiagnosticRow = Readonly<Record<string, string | number | null>>;
 type QueryRow = Readonly<Record<string, unknown>>;
+export type DiagnosticGraphConnectionFactory = () => Promise<FalkorDB>;
 
 function stableId(kind: string, identity: string): string {
   return createHash("sha256").update(`${kind}:${identity}`).digest("hex");
@@ -322,9 +324,10 @@ export async function ingestCompilerDiagnostics(
 
 export async function listLatestCompilerDiagnostics(
   rootDir: string,
+  connect: DiagnosticGraphConnectionFactory = connectToGraph,
 ): Promise<readonly QueryRow[]> {
   const absoluteRoot = resolve(rootDir);
-  const db = await connectToGraph();
+  const db = await connect();
   try {
     const graph = db.selectGraph(graphName);
     const latestSession = await graph.roQuery<QueryRow>(
