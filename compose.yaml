@@ -1,0 +1,22 @@
+name: debuggraph
+
+services:
+  falkordb:
+    image: falkordb/falkordb:v4.22.1
+    container_name: debuggraph-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FALKORDB_PORT:-6379}:6379"
+    volumes:
+      - falkordb-data:/var/lib/falkordb/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "-h", "127.0.0.1", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  falkordb-data:
+    external: true
+    name: "${FALKORDB_VOLUME:-debuggraph-data}"

@@ -352,7 +352,8 @@ export async function listLatestCompilerDiagnostics(
     const result = await graph.roQuery<QueryRow>(
       `
         MATCH (session:Session {id: $sessionId})-[:TARGETS]->(diagnostic:Diagnostic)
-        RETURN session.id AS sessionId,
+        RETURN diagnostic.id AS diagnosticId,
+               session.id AS sessionId,
                diagnostic.severity AS severity,
                diagnostic.code AS code,
                diagnostic.message AS message,

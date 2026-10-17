@@ -30,7 +30,8 @@ and autonomous repair workflow are not implemented yet.
 
 - FalkorDB connection using `FALKORDB_HOST` and `FALKORDB_PORT`, defaulting to
   `127.0.0.1:6379`.
-- Selection of the `DebugGraph` graph.
+- Selection of the graph named by `FALKORDB_GRAPH` (the demo default is
+  `DebugGraphDev`).
 - Schema initialization and validation in
   [`src/graph/schema.ts`](./src/graph/schema.ts). Initialization creates the
   approved range indexes and unique constraints, waits for asynchronous
@@ -58,8 +59,7 @@ and autonomous repair workflow are not implemented yet.
 
 ### Not implemented yet
 
-- Debugging sessions, hypotheses, patches, attempts, or evidence persistence.
-- Graph-based context retrieval for an AI agent.
+- A browser UI or HTTP application server.
 - API endpoint tracing or cross-service type-contract tracing.
 - Repeated-failure detection and retry-prevention logic.
 - A VS Code debugging interface or autonomous coding-agent workflow.
@@ -165,7 +165,8 @@ The variables are:
 | --- | --- | --- |
 | `FALKORDB_HOST` | `127.0.0.1` | Host passed to `FalkorDB.connect`. |
 | `FALKORDB_PORT` | `6379` | Port passed to `FalkorDB.connect`. |
-| `FALKORDB_GRAPH` | `DebugGraph` | Graph selected by schema, ingestion, inspection, and graph operations. |
+| `FALKORDB_GRAPH` | `DebugGraphDev` in `.env.example`, otherwise `DebugGraph` | Graph selected by all graph operations. |
+| `FALKORDB_VOLUME` | `debuggraph-data` | Existing Docker volume mounted at `/data` by Compose. |
 
 The current `.env` file is not loaded automatically by the application. If
 you need values from it in a PowerShell session, load them explicitly or set
@@ -174,41 +175,34 @@ the environment variables in the session, for example:
 ```powershell
 $env:FALKORDB_HOST = "127.0.0.1"
 $env:FALKORDB_PORT = "6379"
-$env:FALKORDB_GRAPH = "DebugGraph"
+$env:FALKORDB_GRAPH = "DebugGraphDev"
 ```
 
 Never commit `.env`. The repository's `.gitignore` excludes it.
 
-### 4. Start FalkorDB
+### 4. Start FalkorDB with Docker Compose
 
-There is no Docker Compose file in this repository. A local setup can use the
-official FalkorDB image with the ports expected by [the graph client](./src/graph/client.ts):
-
-```powershell
-docker run -d --name debuggraph-db `
-  -p 6379:6379 `
-  falkordb/falkordb:latest
-```
-
-This command creates a container without a host-mounted data volume. For
-persistent local data, add a deliberately chosen Docker volume, for example:
+Create the named volume once, then start the pinned FalkorDB service:
 
 ```powershell
-docker volume create debuggraph-data
-docker run -d --name debuggraph-db `
-  -p 6379:6379 `
-  -v debuggraph-data:/data `
-  falkordb/falkordb:latest
+npm run db:volume
+npm run db:up
+npm run db:status
 ```
 
-If a container with that name already exists, start it instead:
+[`compose.yaml`](./compose.yaml) publishes FalkorDB on the localhost-bound `FALKORDB_PORT`, checks readiness with `redis-cli ping`, restarts the container unless explicitly stopped, and mounts the external `FALKORDB_VOLUME` at `/var/lib/falkordb/data`, the database's configured storage directory. The external volume is intentional: `docker compose down` removes the container but preserves graph data. Do not use `docker compose down -v` or `docker volume rm` for the demo graph.
+
+To stop without removing the container:
 
 ```powershell
-docker start debuggraph-db
+npm run db:stop
 ```
 
-The repository does not define persistence or backup policy. Treat this as a
-development database.
+To remove only the Compose container while preserving the volume:
+
+```powershell
+npm run db:down
+```
 
 ### 5. Verify database reachability
 
@@ -226,7 +220,7 @@ smoke-test node should be written to a separate development graph.
 You can also verify that the container is running:
 
 ```powershell
-docker ps --filter "name=debuggraph-db"
+npm run db:status
 Test-NetConnection 127.0.0.1 -Port 6379
 ```
 
@@ -581,11 +575,76 @@ Run the focused tests with:
 npm test
 ```
 
+## Hackathon demo checklist
+
+Use a dedicated graph so the demo cannot mix with an existing `DebugGraph`:
+
+```powershell
+$env:FALKORDB_HOST = "127.0.0.1"
+$env:FALKORDB_PORT = "6379"
+$env:FALKORDB_GRAPH = "DebugGraphDev"
+$env:FALKORDB_VOLUME = "debuggraph-data"
+npm run db:volume
+npm run db:up
+npx tsx --eval "import { initializeSchema } from './src/graph/schema.ts'; (async () => { await initializeSchema(); })();"
+npm run ingest
+npm run diagnostics
+```
+
+The diagnostic command prints each latest-scan row with its `diagnosticId`.
+Choose one reported ID for the investigation step. If the clean checkout has
+no compiler diagnostics, use a known diagnostic ID already present in the
+dedicated demo graph or demonstrate the latest-scan `0 diagnostics` result.
+
+To demonstrate read-only investigation and reconciliation:
+
+```powershell
+$diagnosticId = "<diagnostic-id-from-diagnostics-output>"
+npm run investigate -- $diagnosticId
+```
+
+For a repeatable project-level verification record, use stable IDs and do not
+provide `diagnosticId` when creating the session:
+
+```powershell
+npm run history -- session '{"sessionId":"demo-project-verification","goal":"Demo project verification","baselineRevision":"demo"}'
+npm run history -- hypothesis '{"sessionId":"demo-project-verification","statement":"The project compiles","provenanceKind":"demo"}'
+npm run history -- attempt '{"sessionId":"demo-project-verification","hypothesisId":"<hypothesis-id>","attemptId":"demo-project-tsc","sequenceNo":1,"status":"completed","testCommand":"npx tsc --noEmit"}'
+npm run history -- outcome '{"attemptId":"demo-project-tsc","outcome":"successful","resultSummary":"The compiler completed successfully."}'
+npm run history -- evidence '{"attemptId":"demo-project-tsc","kind":"compiler_verification","result":"passed","summary":"npx tsc --noEmit completed successfully.","sourceKind":"compiler","sourceRef":"demo","testName":"npx tsc --noEmit","exitCode":0,"hypothesisId":"<hypothesis-id>","relationToHypothesis":"CONTRADICTS"}'
+npm run investigate -- $diagnosticId
+```
+
+The result keeps this project-level evidence in the reconciliation section as
+`project-level-uncertain`; it does not create a `TARGETS` relationship or mark
+the diagnostic resolved. A session created with `diagnosticId` explicitly
+supplied demonstrates `diagnostic-associated` evidence. The MCP response is
+the same assembled JSON and is read-only:
+
+```json
+{
+  "mcpServers": {
+    "debuggraph": {
+      "command": "node",
+      "args": ["--import", "tsx", "src/mcp-server.ts"],
+      "env": {
+        "FALKORDB_HOST": "127.0.0.1",
+        "FALKORDB_PORT": "6379",
+        "FALKORDB_GRAPH": "DebugGraphDev"
+      }
+    }
+  }
+}
+```
+
+Keep this client registration local. The repository ignores
+`.mcp.json` and `.vscode/mcp.json` because MCP configuration is
+machine-specific.
+
 Stop local containers when finished:
 
 ```powershell
-docker stop debuggraph-browser
-docker stop debuggraph-db
+npm run db:stop
 ```
 
 ## Graph schema
@@ -735,11 +794,12 @@ The last query is parameterized in application code by
 .
 ├── .env.example              # FalkorDB connection and graph template
 ├── .gitignore                # Local/build exclusions
-├── package.json              # Dependencies and ingest/diagnostics scripts
+├── compose.yaml              # Pinned FalkorDB service and persistent volume
+├── package.json              # Dependencies and CLI/database scripts
 ├── package-lock.json         # Locked npm dependency tree
 ├── tsconfig.json             # Strict TypeScript configuration
 ├── examples/                 # Currently empty
-├── tests/                    # Currently empty; no runner is configured
+├── tests/                    # Node test-runner coverage
 └── src/
     ├── index.ts              # Minimal startup message
     ├── ingest-cli.ts         # CLI entry point for project ingestion
@@ -818,8 +878,8 @@ docker ps --filter "name=debuggraph-db"
 Test-NetConnection 127.0.0.1 -Port 6379
 ```
 
-Start the container with `docker start debuggraph-db`, or create it using the
-command in [Local setup](#4-start-falkordb).
+Start the service with `npm run db:up`, or inspect its health with
+`npm run db:status`. Use `npm run db:logs` for startup diagnostics.
 
 ### Incorrect host or port
 
